@@ -1,0 +1,249 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Program Launcher</title>
+
+<style>
+body{
+    margin:0;
+    padding:30px;
+    font-family:Arial,sans-serif;
+    background:#111;
+    color:#fff;
+}
+
+h1{
+    margin-bottom:25px;
+}
+
+#status{
+    color:#888;
+    margin-bottom:20px;
+}
+
+.grid{
+    display:grid;
+    grid-template-columns:repeat(auto-fill,minmax(240px,1fr));
+    gap:16px;
+}
+
+.card{
+    display:block;
+    padding:20px;
+    background:#1c1c1c;
+    border:1px solid #333;
+    border-radius:12px;
+    color:#fff;
+    text-decoration:none;
+    transition:.15s;
+}
+
+.card:hover{
+    background:#292929;
+    transform:translateY(-2px);
+}
+
+.title{
+    font-size:20px;
+    font-weight:bold;
+    margin-bottom:10px;
+}
+
+.description{
+    color:#aaa;
+    line-height:1.5;
+    white-space:pre-line;
+}
+
+.path{
+    margin-top:14px;
+    color:#666;
+    font-size:12px;
+}
+
+.error{
+    color:#ff7777;
+}
+</style>
+</head>
+
+<body>
+
+<h1>プログラムを選択</h1>
+
+<div id="status">読み込み中...</div>
+<div id="app" class="grid"></div>
+
+<script>
+const OWNER = "YOUR_GITHUB_NAME";
+const REPO  = "YOUR_REPOSITORY";
+const BRANCH = "main";
+
+const INDEX_FILE = "./program-index.json";
+const CACHE_KEY = "program-launcher-index";
+
+async function getText(url){
+    const res = await fetch(url);
+    if(!res.ok) throw new Error(res.status);
+    return await res.text();
+}
+
+async function getRepositoryTree(){
+    const url =
+        `https://api.github.com/repos/${OWNER}/${REPO}/git/trees/${BRANCH}?recursive=1`;
+
+    const res = await fetch(url,{
+        headers:{
+            "Accept":"application/vnd.github+json"
+        }
+    });
+
+    if(!res.ok){
+        throw new Error("GitHubリポジトリを取得できませんでした");
+    }
+
+    return await res.json();
+}
+
+async function getReadme(path){
+    const url =
+        `https://raw.githubusercontent.com/${OWNER}/${REPO}/${BRANCH}/${encodeURI(path)}`;
+
+    try{
+        const text = await getText(url);
+
+        return text
+            .split(/\r?\n/)
+            .map(x => x.trim())
+            .filter(Boolean)
+            .slice(0,3)
+            .join("\n");
+    }catch{
+        return "";
+    }
+}
+
+async function getTitle(path){
+    const url =
+        `https://raw.githubusercontent.com/${OWNER}/${REPO}/${BRANCH}/${encodeURI(path)}`;
+
+    try{
+        const html = await getText(url);
+        const doc =
+            new DOMParser().parseFromString(html,"text/html");
+
+        return (
+            doc.querySelector("title")?.textContent?.trim()
+        ) || path.split("/").pop();
+    }catch{
+        return path.split("/").pop();
+    }
+}
+
+async function createIndex(){
+    const tree = await getRepositoryTree();
+
+    const htmlFiles = tree.tree.filter(file =>
+        file.type === "blob" &&
+        /\.html?$/i.test(file.path) &&
+        file.path !== "index.html"
+    );
+
+    const programs = [];
+
+    for(const file of htmlFiles){
+        const parts = file.path.split("/");
+        parts.pop();
+
+        const folder = parts.join("/");
+        const readme = folder
+            ? `${folder}/README.md`
+            : "README.md";
+
+        const title = await getTitle(file.path);
+        const description = await getReadme(readme);
+
+        programs.push({
+            title,
+            description,
+            file:file.path
+        });
+    }
+
+    return programs;
+}
+
+function show(programs){
+    const app = document.getElementById("app");
+
+    document.getElementById("status").textContent =
+        `${programs.length} 個のプログラム`;
+
+    app.innerHTML = "";
+
+    for(const program of programs){
+        const a = document.createElement("a");
+        a.className = "card";
+        a.href = program.file;
+
+        const title = document.createElement("div");
+        title.className = "title";
+        title.textContent = program.title;
+
+        const description = document.createElement("div");
+        description.className = "description";
+        description.textContent =
+            program.description || "説明はありません";
+
+        const path = document.createElement("div");
+        path.className = "path";
+        path.textContent = program.file;
+
+        a.append(title,description,path);
+        app.appendChild(a);
+    }
+}
+
+async function init(){
+
+    try{
+        const index = await getText(INDEX_FILE);
+        const programs = JSON.parse(index);
+        show(programs);
+        return;
+    }catch{}
+
+    try{
+        const cache = localStorage.getItem(CACHE_KEY);
+
+        if(cache){
+            const programs = JSON.parse(cache);
+            show(programs);
+        }
+    }catch{}
+
+    document.getElementById("status").textContent =
+        "GitHubからプログラムを取得中...";
+
+    try{
+        const programs = await createIndex();
+
+        localStorage.setItem(
+            CACHE_KEY,
+            JSON.stringify(programs)
+        );
+
+        show(programs);
+    }catch(error){
+        document.getElementById("status").innerHTML =
+            `<span class="error">${error.message}</span>`;
+    }
+}
+
+init();
+</script>
+
+</body>
+</html>
