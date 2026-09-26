@@ -5,50 +5,18 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Program Launcher</title>
 <style>
-body{
-    margin:0;
-    padding:30px;
-    font-family:Arial,sans-serif;
-    background:#111;
-    color:#fff
-}
+body{margin:0;padding:30px;font-family:Arial,sans-serif;background:#111;color:#fff}
 h1{margin:0 0 24px}
 #status{color:#888;margin-bottom:20px}
-.grid{
-    display:grid;
-    grid-template-columns:repeat(auto-fill,minmax(240px,1fr));
-    gap:16px
-}
-.card{
-    display:block;
-    padding:20px;
-    background:#1c1c1c;
-    border:1px solid #333;
-    border-radius:12px;
-    color:#fff;
-    text-decoration:none;
-    transition:.15s
-}
-.card:hover{
-    background:#292929;
-    transform:translateY(-2px)
-}
-.title{
-    font-size:20px;
-    font-weight:bold;
-    margin-bottom:10px
-}
-.description{
-    color:#aaa;
-    line-height:1.5;
-    white-space:pre-line
-}
-.path{
-    margin-top:14px;
-    color:#666;
-    font-size:12px;
-    word-break:break-all
-}
+.section{margin:0 0 28px}
+.section h2{font-size:15px;color:#999;margin:0 0 12px}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:16px}
+.card{display:block;padding:20px;background:#1c1c1c;border:1px solid #333;border-radius:12px;color:#fff;text-decoration:none;transition:.15s}
+.card:hover{background:#292929;transform:translateY(-2px)}
+.title{font-size:20px;font-weight:bold;margin-bottom:10px}
+.description{color:#aaa;line-height:1.5;white-space:pre-line}
+.path{margin-top:14px;color:#666;font-size:12px;word-break:break-all}
+.empty{color:#666}
 .error{color:#ff7777;white-space:pre-line}
 </style>
 </head>
@@ -56,150 +24,110 @@ h1{margin:0 0 24px}
 <body>
 <h1>プログラムを選択</h1>
 <div id="status">読み込み中...</div>
-<div id="app" class="grid"></div>
+
+<div id="recentSection" class="section" hidden>
+    <h2>最近開いたプログラム</h2>
+    <div id="recent" class="grid"></div>
+</div>
+
+<div id="allSection" class="section">
+    <h2>すべてのプログラム</h2>
+    <div id="app" class="grid"></div>
+</div>
 
 <script>
 const INDEX_FILE = "./program-index.json";
-const CACHE_KEY = "program-launcher-index-v1";
+const CACHE_KEY = "program-launcher-index-v2";
+const OPENED_KEY = "program-launcher-opened-v1";
 
 /*
-    GitHub Pages の現在URLから
-    owner / repository / base path を自動判定
+    GitHub Pagesの現在URLから
+    owner / repository / base pathを自動判定
 */
 function getGitHubInfo(){
     const host = location.hostname;
     const path = location.pathname.split("/").filter(Boolean);
-
-    /*
-        https://USER.github.io/REPO/
-    */
     const match = host.match(/^([^./]+)\.github\.io$/i);
 
-    if(!match){
+    if(!match)
         throw new Error(
-            "GitHub PagesのURLを判定できませんでした。\\n" +
-            "https://ユーザー名.github.io/リポジトリ/ の形式で開いてください。"
+            "GitHub PagesのURLを判定できませんでした。"
         );
-    }
 
-    const owner = match[1];
-
-    /*
-        project site:
-        /repository/
-    */
-    if(!path.length){
-        /*
-            ユーザーサイトの場合。
-            現在のURLだけでは「どのrepositoryがPagesの元か」を
-            一意に判定できないため、対象外。
-        */
+    if(!path.length)
         throw new Error(
-            "ユーザーサイト形式ではリポジトリをURLだけから判定できません。\\n" +
             "リポジトリ用GitHub Pages（/repository/）で使用してください。"
         );
-    }
 
-    const repo = decodeURIComponent(path[0]);
-    const basePath = "/" + repo + "/";
-
-    return {owner,repo,basePath};
+    return {
+        owner:match[1],
+        repo:decodeURIComponent(path[0]),
+        basePath:"/" + path[0] + "/"
+    };
 }
 
-/*
-    GitHub API
-    → リポジトリ情報
-    → default branch を自動取得
-*/
+async function getText(url){
+    const res = await fetch(url);
+    if(!res.ok) throw new Error(`${res.status}`);
+    return await res.text();
+}
+
 async function getRepositoryInfo(owner,repo){
-    const url = `https://api.github.com/repos/${owner}/${encodeURIComponent(repo)}`;
+    const url =
+        `https://api.github.com/repos/${owner}/${encodeURIComponent(repo)}`;
 
     const res = await fetch(url,{
-        headers:{
-            "Accept":"application/vnd.github+json"
-        }
+        headers:{"Accept":"application/vnd.github+json"}
     });
 
-    if(!res.ok){
-        const body = await res.text().catch(()=> "");
+    if(!res.ok)
         throw new Error(
-            `GitHubリポジトリ取得失敗: ${res.status} ${res.statusText}` +
-            (body ? `\n${body.slice(0,300)}` : "")
+            `GitHubリポジトリ取得失敗: ${res.status} ${res.statusText}`
         );
-    }
 
     return await res.json();
 }
 
-/*
-    GitHub Tree
-    → リポジトリ内のファイル一覧
-*/
 async function getTree(owner,repo,branch){
     const url =
         `https://api.github.com/repos/${owner}/${encodeURIComponent(repo)}/git/trees/${encodeURIComponent(branch)}?recursive=1`;
 
     const res = await fetch(url,{
-        headers:{
-            "Accept":"application/vnd.github+json"
-        }
+        headers:{"Accept":"application/vnd.github+json"}
     });
 
-    if(!res.ok){
-        const body = await res.text().catch(()=> "");
+    if(!res.ok)
         throw new Error(
-            `GitHubファイル一覧取得失敗: ${res.status} ${res.statusText}` +
-            (body ? `\n${body.slice(0,300)}` : "")
+            `GitHubファイル一覧取得失敗: ${res.status} ${res.statusText}`
         );
-    }
 
     return await res.json();
 }
 
-/*
-    Raw GitHubからテキスト取得
-*/
 async function getRaw(owner,repo,branch,path){
     const url =
-        `https://raw.githubusercontent.com/${owner}/${repo}/${encodeURIComponent(branch)}/${path
-            .split("/")
-            .map(encodeURIComponent)
-            .join("/")}`;
+        `https://raw.githubusercontent.com/${owner}/${repo}/${encodeURIComponent(branch)}/` +
+        path.split("/").map(encodeURIComponent).join("/");
 
-    const res = await fetch(url);
-
-    if(!res.ok) throw new Error(res.status);
-
-    return await res.text();
+    return await getText(url);
 }
 
-/*
-    HTMLの<title>を取得
-*/
 async function getTitle(owner,repo,branch,path){
     try{
         const html = await getRaw(owner,repo,branch,path);
-        const doc =
-            new DOMParser().parseFromString(html,"text/html");
-
-        return (
-            doc.querySelector("title")?.textContent?.trim()
-        ) || path.split("/").pop().replace(/\.html?$/i,"");
+        const doc = new DOMParser().parseFromString(html,"text/html");
+        return doc.querySelector("title")?.textContent?.trim()
+            || path.split("/").pop().replace(/\.html?$/i,"");
     }catch{
         return path.split("/").pop().replace(/\.html?$/i,"");
     }
 }
 
-/*
-    READMEの最上部を取得
-*/
 async function getReadme(owner,repo,branch,path){
     try{
         const text = await getRaw(owner,repo,branch,path);
-
-        return text
-            .split(/\r?\n/)
-            .map(x => x.trim())
+        return text.split(/\r?\n/)
+            .map(x=>x.trim())
             .filter(Boolean)
             .slice(0,4)
             .join("\n");
@@ -209,7 +137,7 @@ async function getReadme(owner,repo,branch,path){
 }
 
 /*
-    HTML一覧からプログラム情報を作る
+    GitHubからプログラム一覧を作成
 */
 async function createIndex(owner,repo,branch){
     const tree = await getTree(owner,repo,branch);
@@ -222,14 +150,11 @@ async function createIndex(owner,repo,branch){
 
     const programs = [];
 
-    /*
-        APIを一気に叩きすぎないよう4件ずつ処理
-    */
     for(let i=0;i<files.length;i+=4){
         const batch = files.slice(i,i+4);
 
         const results = await Promise.all(
-            batch.map(async file => {
+            batch.map(async file=>{
                 const parts = file.path.split("/");
                 parts.pop();
 
@@ -254,63 +179,127 @@ async function createIndex(owner,repo,branch){
         programs.push(...results);
     }
 
-    programs.sort((a,b) =>
-        a.title.localeCompare(b.title,"ja")
-    );
-
+    programs.sort((a,b)=>a.title.localeCompare(b.title,"ja"));
     return programs;
 }
 
 /*
-    カード表示
+    開いたプログラムを起動インデックスへ追加
 */
-function show(programs,basePath){
-    const app = document.getElementById("app");
+function rememberOpened(program){
+    try{
+        let opened =
+            JSON.parse(localStorage.getItem(OPENED_KEY) || "[]");
 
-    document.getElementById("status").textContent =
-        `${programs.length} 個のプログラム`;
+        opened = opened.filter(x=>x.file !== program.file);
 
-    app.innerHTML = "";
+        opened.unshift({
+            ...program,
+            openedAt:Date.now()
+        });
 
-    for(const program of programs){
-        const a = document.createElement("a");
-        a.className = "card";
-        a.href = basePath + program.file;
+        /*
+            最大20件まで記録
+        */
+        opened = opened.slice(0,20);
 
-        const title = document.createElement("div");
-        title.className = "title";
-        title.textContent = program.title;
+        localStorage.setItem(
+            OPENED_KEY,
+            JSON.stringify(opened)
+        );
+    }catch{}
+}
 
-        const description = document.createElement("div");
-        description.className = "description";
-        description.textContent =
-            program.description || "説明はありません";
+/*
+    起動インデックスを取得
+*/
+function getOpened(){
+    try{
+        const opened =
+            JSON.parse(localStorage.getItem(OPENED_KEY) || "[]");
 
-        const path = document.createElement("div");
-        path.className = "path";
-        path.textContent = program.file;
-
-        a.append(title,description,path);
-        app.appendChild(a);
+        return Array.isArray(opened) ? opened : [];
+    }catch{
+        return [];
     }
 }
 
 /*
-    index.json を読み込む
+    カードを作成
 */
-async function loadIndexFile(){
-    const res = await fetch(INDEX_FILE,{
-        cache:"no-store"
+function makeCard(program,basePath){
+    const a = document.createElement("a");
+    a.className = "card";
+    a.href = basePath + program.file;
+
+    a.addEventListener("click",()=>{
+        rememberOpened(program);
     });
 
-    if(!res.ok) throw new Error(res.status);
+    const title = document.createElement("div");
+    title.className = "title";
+    title.textContent = program.title;
 
-    return await res.json();
+    const description = document.createElement("div");
+    description.className = "description";
+    description.textContent =
+        program.description || "説明はありません";
+
+    const path = document.createElement("div");
+    path.className = "path";
+    path.textContent = program.file;
+
+    a.append(title,description,path);
+    return a;
 }
 
 /*
-    起動
+    一覧表示
 */
+function show(programs,basePath){
+    const app = document.getElementById("app");
+    app.innerHTML = "";
+
+    document.getElementById("status").textContent =
+        `${programs.length} 個のプログラム`;
+
+    for(const program of programs)
+        app.appendChild(makeCard(program,basePath));
+}
+
+/*
+    最近開いたものを即時表示
+*/
+function showRecent(basePath){
+    const opened = getOpened();
+    const section = document.getElementById("recentSection");
+    const recent = document.getElementById("recent");
+
+    recent.innerHTML = "";
+
+    if(!opened.length){
+        section.hidden = true;
+        return;
+    }
+
+    section.hidden = false;
+
+    /*
+        新しい順で最大6件
+    */
+    for(const program of opened.slice(0,6))
+        recent.appendChild(makeCard(program,basePath));
+}
+
+/*
+    GitHub上のprogram-index.jsonを読む
+*/
+async function loadIndexFile(){
+    const res = await fetch(INDEX_FILE,{cache:"no-store"});
+    if(!res.ok) throw new Error(res.status);
+    return await res.json();
+}
+
 async function init(){
     const status = document.getElementById("status");
 
@@ -318,39 +307,41 @@ async function init(){
         const {owner,repo,basePath} = getGitHubInfo();
 
         /*
-            1. まず既存インデックスを確認
+            ① 保存済みの起動インデックスを最初に表示
+               → GitHub待ち時間なし
+        */
+        showRecent(basePath);
+
+        /*
+            ② GitHub上の正式なインデックスを確認
         */
         try{
             const programs = await loadIndexFile();
             show(programs,basePath);
             return;
-        }catch{
-            /*
-                indexがなければ生成へ
-            */
-        }
+        }catch{}
 
         /*
-            2. 前回生成したローカルキャッシュがあれば先に表示
+            ③ ローカルキャッシュがあれば即表示
         */
         try{
-            const cache = localStorage.getItem(CACHE_KEY);
+            const cache =
+                JSON.parse(
+                    localStorage.getItem(CACHE_KEY) || "null"
+                );
 
-            if(cache){
-                const data = JSON.parse(cache);
-
-                if(
-                    data.owner === owner &&
-                    data.repo === repo &&
-                    Array.isArray(data.programs)
-                ){
-                    show(data.programs,basePath);
-                }
+            if(
+                cache &&
+                cache.owner === owner &&
+                cache.repo === repo &&
+                Array.isArray(cache.programs)
+            ){
+                show(cache.programs,basePath);
             }
         }catch{}
 
         /*
-            3. GitHubからリポジトリ情報取得
+            ④ インデックスがないのでGitHubから生成
         */
         status.textContent =
             "インデックスがないためGitHubを確認中...";
@@ -358,15 +349,9 @@ async function init(){
         const repository =
             await getRepositoryInfo(owner,repo);
 
-        /*
-            default branchを自動使用
-        */
         const branch =
             repository.default_branch;
 
-        /*
-            4. HTML + READMEからインデックス生成
-        */
         status.textContent =
             "プログラムを取得中...";
 
@@ -374,7 +359,7 @@ async function init(){
             await createIndex(owner,repo,branch);
 
         /*
-            5. ブラウザ側にも保存
+            ⑤ ローカルに検索・起動用インデックスを保存
         */
         localStorage.setItem(
             CACHE_KEY,
@@ -387,6 +372,7 @@ async function init(){
         );
 
         show(programs,basePath);
+        showRecent(basePath);
 
     }catch(error){
         status.innerHTML =
@@ -397,7 +383,7 @@ async function init(){
 function escapeHtml(text){
     return String(text).replace(
         /[&<>"']/g,
-        c => ({
+        c=>({
             "&":"&amp;",
             "<":"&lt;",
             ">":"&gt;",
